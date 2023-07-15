@@ -15,11 +15,10 @@ library(formattable)
 #setwd("C:/Users/eags8/Dropbox/pff_bdue")
 
 data_frame <- read.csv("wrangled_pbp.csv", stringsAsFactors = FALSE)
-table <- read.csv("ol_averages.csv", stringsAsFactors = FALSE)
 source("ol_function.R")
 
 shinyServer(function(input, output) {
-  df <- reactive({ol_function(data_frame, table, input$player, input$position)})
+  df <- reactive({ol_function(data_frame, input$player, input$position, input$TTT, input$play_action, input$beaten)})
   
   output$plot <- ({renderPlot(df()$plot)})
   output$table <- ({renderDataTable(df()$table)})

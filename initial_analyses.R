@@ -1,5 +1,5 @@
 library(dplyr); library(ggplot2); library(xgboost); library(caret)
-seconds <- 2.5
+seconds <- 3.5
 
 setwd("C:/Users/eric/Dropbox/PC (2)/Documents")
 players <- read.csv("players.csv") %>% select(nflId, officialPosition, displayName)
@@ -28,18 +28,29 @@ pbp <- pbp %>%
   inner_join(games, by = "gameId") %>% 
   mutate(is_home = ifelse(homeTeamAbbr == team, 1, 0))
 
-normalize <- pbp %>% filter(frameId == 10*seconds + ball_snap_frameId) %>%
+pass_thrown_Id <- pbp %>% filter(event %in% c("pass_forward", "qb_sack", "qb_strip_sack", "run")) %>%
+  unique() %>%
+  mutate(time_to_throw = (frameId - ball_snap_frameId + 1)/10) %>%
+select(gameId, playId, time_to_throw, pass_frame = frameId)
+
+pass_thrown_Id <- pass_thrown_Id %>% group_by(gameId, playId) %>%
+  summarize(time_to_throw = min(time_to_throw), pass_frame = min(pass_frame))
+
+max_TTT <- max(filter(pass_thrown_Id, !is.na(time_to_throw))$time_to_throw)
+
+pbp <- pbp %>% left_join(pass_thrown_Id, by = c("gameId", "playId")) %>%
+  mutate(time_to_throw = ifelse(is.na(time_to_throw), max_TTT, time_to_throw), 
+         pass_frame = ifelse(is.na(pass_frame), 1000, pass_frame)) %>%
+  mutate(timer_frame = 10*seconds + ball_snap_frameId) %>%
+  mutate(stop_frame = pmin(timer_frame, pass_frame)) %>%
+  mutate(pass_away = ifelse(pass_frame <= timer_frame, "yes", "no"))
+
+
+normalize <- pbp %>% filter(frameId == stop_frame) %>%
   mutate(vert_depth = abs(x - ball_snap_x), 
          depth = sqrt((x - ball_snap_x)^2 + (y - ball_snap_y)^2), 
          score_diff = ifelse(is_home == 1, preSnapHomeScore - preSnapVisitorScore, -preSnapHomeScore + preSnapVisitorScore), 
          field_pos = ifelse(possessionTeam == yardlineSide, 50 + yardlineNumber, yardlineNumber))
-
-"pass_forward" 
-"qb_sack"
-"qb_strip_sack"
-"run"
-"autoevent_passforward"
-"autoevent_ballsnap"
 
 
 # think about nearest offensive player - splits
@@ -56,7 +67,7 @@ parametersGrid <-  expand.grid(eta = c(0.1), colsample_bytree = c(0.25, 0.5, 0.7
                                max_depth = c(2, 4, 6, 8), nrounds = c(200),
                                gamma = 1, min_child_weight = 1, subsample = 1)
 
-fit <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + 
+fit <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + pass_away + time_to_throw + 
                ball_snap_x + ball_snap_y + pff_positionLinedUp + score_diff + 
                defendersInBox + pff_playAction + pff_passCoverageType + 
                dropBackType + offenseFormation, 
@@ -75,18 +86,12 @@ pbp <- pbp %>% left_join(normalize, by = c("gameId", "playId", "nflId")) %>%
   filter(frameId >= ball_snap_frameId) %>%
   mutate(new_frameId = frameId - ball_snap_frameId + 1)
 
-averages <- pbp %>% filter(new_frameId <= seconds*10) %>%
-  group_by(nflId, displayName, pff_positionLinedUp, new_frameId) %>%
-  summarize(y_mean = mean(y - ball_snap_y), x_mean = mean(x - ball_snap_x))
-
-pbp <- pbp %>% inner_join(averages, by = c("nflId", "displayName", "pff_positionLinedUp", "new_frameId")) %>%
-  filter(new_frameId <= seconds*10)
-
 pbp_slim <- pbp %>% select(gameId, playId, x,y, ball_snap_x, ball_snap_y, 
-                           beaten, over_under, x_mean, y_mean, pff_positionLinedUp, 
-                           displayName)
+                           beaten, over_under, pff_positionLinedUp, pff_playAction, 
+                           nflId, displayName, time_to_throw, pass_away, new_frameId) %>%
+  filter(new_frameId <= seconds*10)
 write.csv(pbp_slim, "wrangled_pbp.csv", row.names = FALSE)
-write.csv(averages, "ol_averages.csv", row.names = FALSE)
+#write.csv(averages, "ol_averages.csv", row.names = FALSE)
 write.csv(pbp_slim %>% select(displayName) %>% unique(), "ol_names.csv", row.names = FALSE)
 
 example <- pbp_slim %>% filter(#gameId == 2021090900, 

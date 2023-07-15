@@ -17,18 +17,30 @@ library(formattable)
 NAMES <- read.csv("ol_names.csv", stringsAsFactors = FALSE) %>% pull(displayName)
 
 # Define UI for application that draws a histogram
+
 shinyUI(fluidPage(
   
-  # Application title
   titlePanel("Sumer OL Pass Blocking Analysis"),
   
-  # Sidebar with a slider input for number of bins
   sidebarLayout(
-    column(width = 12, sidebarPanel(
-      selectInput("player", "Player", NAMES, "Jawaan Taylor"), 
-      selectInput("position", "Position", c("LT", "LG", "C", "RG", "RT"), "RT"))), 
+    position = "right",
+    sidebarPanel(  
+        selectInput("player", "Player", NAMES, "Jawaan Taylor"), 
+        selectInput("position", "Position", c("LT", "LG", "C", "RG", "RT"), "RT"), 
+        numericInput("TTT", "Time to Throw Threshold", 2.75), 
+        selectInput("play_action", "Play Action", c("yes", "no", "all"), "no"), 
+        selectInput("beaten", "Beaten on Play", c("yes", "no", "all"), "all")),
     
-    # Show a plot of the generated distribution
+    
     mainPanel(align = "center",
-              plotOutput("plot", width = 750, height = 400),
-              dataTableOutput("table")))))
+              plotOutput("plot"),
+              br(),
+              align = "center",
+              dataTableOutput("table"),
+              
+              tags$style(type="text/css",
+                         ".shiny-output-error { visibility: hidden; }",
+                         ".shiny-output-error:before { visibility: hidden; }"
+              )           
+              
+    ))))
