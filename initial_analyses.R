@@ -1,5 +1,6 @@
 library(dplyr); library(ggplot2); library(xgboost); library(caret)
 seconds <- 3.5
+seconds_first_step <- 1.5
 
 setwd("C:/Users/eric/Dropbox/PC (2)/Documents")
 players <- read.csv("players.csv") %>% select(nflId, officialPosition, displayName)
@@ -27,6 +28,23 @@ pbp <- pbp %>%
   inner_join(plays, by = c("gameId", "playId")) %>% 
   inner_join(games, by = "gameId") %>% 
   mutate(is_home = ifelse(homeTeamAbbr == team, 1, 0))
+
+first_step_Id <- pbp %>% filter(frameId == ball_snap_frameId + 10*seconds_first_step) %>%
+  select(gameId, playId, nflId, first_step_frameId = frameId) %>% unique()
+first_step_coord <- pbp %>% filter(frameId == ball_snap_frameId + 10*seconds_first_step) %>%
+  select(gameId, playId, nflId, first_step_x = x, first_step_y = y)
+
+pbp <- pbp %>%
+  left_join(first_step_Id, by = c("gameId", "playId", "nflId")) %>%
+  left_join(first_step_coord, by = c("gameId", "playId", "nflId")) %>%
+  mutate(set = case_when(first_step_x >= ball_snap_x ~ "Other", 
+                         pff_positionLinedUp %in% c("LT", "LG") & first_step_x < ball_snap_x & first_step_y < ball_snap_y ~ "Vertical Set", 
+                         pff_positionLinedUp %in% c("LT", "LG") & first_step_x < ball_snap_x & first_step_y >= ball_snap_y ~ "Down Block", 
+                         pff_positionLinedUp %in% c("RT", "RG") & first_step_x < ball_snap_x & first_step_y > ball_snap_y ~ "Vertical Set", 
+                         pff_positionLinedUp %in% c("RT", "RG") & first_step_x < ball_snap_x & first_step_y <= ball_snap_y ~ "Down Block", 
+                         pff_positionLinedUp %in% c("C") & first_step_x < ball_snap_x & first_step_y < ball_snap_y ~ "Left Guard", 
+                         pff_positionLinedUp %in% c("C") & first_step_x < ball_snap_x & first_step_y >= ball_snap_y ~ "Right Guard",
+                         TRUE ~ "Other"))
 
 pass_thrown_Id <- pbp %>% filter(event %in% c("pass_forward", "qb_sack", "qb_strip_sack", "run")) %>%
   unique() %>%
@@ -67,7 +85,7 @@ parametersGrid <-  expand.grid(eta = c(0.1), colsample_bytree = c(0.25, 0.5, 0.7
                                max_depth = c(2, 4, 6, 8), nrounds = c(200),
                                gamma = 1, min_child_weight = 1, subsample = 1)
 
-fit <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + pass_away + time_to_throw + 
+fit <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + pass_away + time_to_throw + set + 
                ball_snap_x + ball_snap_y + pff_positionLinedUp + score_diff + 
                defendersInBox + pff_playAction + pff_passCoverageType + 
                dropBackType + offenseFormation, 
@@ -86,36 +104,10 @@ pbp <- pbp %>% left_join(normalize, by = c("gameId", "playId", "nflId")) %>%
   filter(frameId >= ball_snap_frameId) %>%
   mutate(new_frameId = frameId - ball_snap_frameId + 1)
 
-pbp_slim <- pbp %>% select(gameId, playId, x,y, ball_snap_x, ball_snap_y, 
+pbp_slim <- pbp %>% select(season, week, gameId, playId, x,y, ball_snap_x, ball_snap_y, 
                            beaten, over_under, pff_positionLinedUp, pff_playAction, 
-                           nflId, displayName, time_to_throw, pass_away, new_frameId) %>%
+                           nflId, displayName, team, time_to_throw, pass_away, new_frameId, set) %>%
   filter(new_frameId <= seconds*10)
-write.csv(pbp_slim, "wrangled_pbp.csv", row.names = FALSE)
+write.csv(pbp_slim, "C:/Users/eric/Dropbox/ol_maps/sumer_ol/wrangled_pbp.csv", row.names = FALSE)
 #write.csv(averages, "ol_averages.csv", row.names = FALSE)
-write.csv(pbp_slim %>% select(displayName) %>% unique(), "ol_names.csv", row.names = FALSE)
-
-example <- pbp_slim %>% filter(#gameId == 2021090900, 
-  displayName == "Jawaan Taylor") 
-
-NAME <- example$displayName[1]
-ggplot(example, aes(y - ball_snap_y, x - ball_snap_x, group = as.factor(paste(gameId, playId)), color = as.factor(over_under), 
-                    linetype = as.factor(beaten)), size = 2) + geom_smooth(se = FALSE) + 
-  geom_point(aes(y_mean, x_mean), color = "red", size = 5) + 
-  scale_colour_manual(values = c("gold", "black")) + 
-  theme_minimal() + labs(x = "vertical distance from position at snap", y = "vertical distance from position at snap", 
-                         color = "Did He Reach Depth?", 
-                         linetype = "Was He Beaten (PFF)?",
-                         title = paste("Pass Blocking Map for", NAME)) #+ theme(legend.position="none")
-
-group_by(pbp %>% filter(pff_positionLinedUp == "LT"), nflId, displayName) %>% 
-  filter(!is.na(over_under)) %>% 
-  summarize(n = n(), over_under = mean(over_under == "yes"), beaten = mean(beaten == "yes")) %>% 
-  filter(n >= 2500) %>% arrange(-over_under) %>% 
-  ggplot(aes(over_under, beaten, label = displayName)) + geom_text() + geom_smooth()
-
-group_by(pbp %>% filter(new_frameId <= 30, pff_positionLinedUp == "RT"), team, nflId, displayName, gameId, playId) %>% 
-  summarize(diff = sum(sqrt((y - ball_snap_y - y_mean)^2 + (x - ball_snap_x - x_mean)^2)), beaten = mean(pff_beatenByDefender)) %>% 
-  group_by(team, nflId, displayName) %>% 
-  summarize(n = n(), diff = mean(diff), beaten = mean(beaten)) %>% arrange(-diff) %>% filter(n >= 100) %>% as.data.frame() %>%
-  group_by(team) %>% summarize(diff = mean(diff)) %>% arrange(-diff)
-
+write.csv(pbp_slim %>% select(displayName) %>% unique(), "C:/Users/eric/Dropbox/ol_maps/sumer_ol/ol_names.csv", row.names = FALSE)

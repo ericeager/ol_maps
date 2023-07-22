@@ -18,7 +18,7 @@ data_frame <- read.csv("wrangled_pbp.csv", stringsAsFactors = FALSE)
 source("ol_function.R")
 
 shinyServer(function(input, output) {
-  df <- reactive({ol_function(data_frame, input$player, input$position, input$TTT, input$play_action, input$beaten)})
+  df <- reactive({ol_function(data_frame, input$player, input$position, input$TTT_l, input$TTT_u, input$play_action, input$beaten)})
   
   output$plot <- ({renderPlot(df()$plot)})
   output$table <- ({renderDataTable(df()$table)})

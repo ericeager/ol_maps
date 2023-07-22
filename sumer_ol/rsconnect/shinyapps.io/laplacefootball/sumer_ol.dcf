@@ -5,9 +5,9 @@ account: laplacefootball
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 9440550
-bundleId: 7458912
+bundleId: 7485865
 url: https://laplacefootball.shinyapps.io/sumer_ol/
-when: 1689384464.5419
-lastSyncTime: 1689384464.54192
+when: 1690040294.48668
+lastSyncTime: 1690040294.4867
 asMultiple: FALSE
 asStatic: FALSE
