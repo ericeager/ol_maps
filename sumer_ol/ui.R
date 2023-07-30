@@ -31,6 +31,7 @@ shinyUI(fluidPage(
         numericInput("TTT_u", "Time to Throw Upper Bound", 3.5), 
         selectInput("play_action", "Play Action", c("yes", "no", "all"), "no"), 
        # selectInput("set", "Set", c("All", "Other", "Down Block", "Vertical Set", "Left Guard", "Right Guard"), "All"),
+        selectInput("depth", "Did He Reach Depth?", c("yes", "no", "all"), "all"),
         selectInput("beaten", "Beaten on Play", c("yes", "no", "all"), "all")),
     
     

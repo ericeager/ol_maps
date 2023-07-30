@@ -1,6 +1,6 @@
 # this is the function for the OL stuff
 
-ol_function <- function(data_frame, player, position, TTT_l, TTT_u, play_action, beaten) {
+ol_function <- function(data_frame, player, position, TTT_l, TTT_u, play_action, beaten, depth) {
  if (play_action == "yes") {
    data_frame <- data_frame %>% filter(pff_playAction == 1)
  } else if (play_action == "no") {
@@ -13,11 +13,15 @@ ol_function <- function(data_frame, player, position, TTT_l, TTT_u, play_action,
     data_frame <- data_frame %>% filter(beaten == "no")
   }
   
- # if (pass_set != "All") {
- #    data_frame <- data_frame %>% filter(set == pass_set)
- #  }
+  if (depth == "yes") {
+    data_frame <- data_frame %>% filter(over_under == "yes")
+  } else if (depth == "no") {
+    data_frame <- data_frame %>% filter(over_under == "no")
+  }
+  
   
  data_frame <- data_frame %>% filter(pff_positionLinedUp == position, time_to_throw >= TTT_l, time_to_throw <= TTT_u)
+ 
  table <- data_frame %>% 
     group_by(nflId, displayName, pff_positionLinedUp, new_frameId) %>%
     summarize(y_mean = mean(y - ball_snap_y), x_mean = mean(x - ball_snap_x)) %>%

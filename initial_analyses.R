@@ -19,6 +19,8 @@ ball_snap_Id <- pbp %>% filter(event %in% c("ball_snap")) %>%
   select(gameId, playId, nflId, ball_snap_frameId = frameId) %>% unique()
 ball_snap_coord <- pbp %>% filter(event %in% c("ball_snap")) %>% 
   select(gameId, playId, nflId, ball_snap_x = x, ball_snap_y = y)
+pbp_next_s <- pbp %>% mutate(s_prev = s, frameId = frameId + 1) %>% 
+  select(gameId, playId, nflId, frameId, s_prev)
 
 pbp <- pbp %>%  
   inner_join(ball_snap_Id, by = c("gameId", "playId", "nflId")) %>% 
@@ -27,7 +29,17 @@ pbp <- pbp %>%
   inner_join(scouting, by = c("gameId", "playId", "nflId")) %>% 
   inner_join(plays, by = c("gameId", "playId")) %>% 
   inner_join(games, by = "gameId") %>% 
-  mutate(is_home = ifelse(homeTeamAbbr == team, 1, 0))
+  left_join(pbp_next_s, by = c("gameId", "playId", "nflId", "frameId")) %>%
+  mutate(is_home = ifelse(homeTeamAbbr == team, 1, 0)) %>%
+  mutate(s_delta = s - s_prev)
+
+pbp$s_delta[is.na(pbp$s_delta)] <- 0
+
+first_min_s <- pbp %>% filter(frameId > ball_snap_frameId, s_delta < 0) %>% group_by(gameId, playId, nflId) %>%
+  arrange(frameId) %>% dplyr::slice(1:1) %>%
+  select(gameId, playId, nflId, decel_frameId = frameId)
+
+pbp <- pbp %>% left_join(first_min_s, by = c("gameId", "playId", "nflId"))
 
 first_step_Id <- pbp %>% filter(frameId == ball_snap_frameId + 10*seconds_first_step) %>%
   select(gameId, playId, nflId, first_step_frameId = frameId) %>% unique()
@@ -61,10 +73,11 @@ pbp <- pbp %>% left_join(pass_thrown_Id, by = c("gameId", "playId")) %>%
          pass_frame = ifelse(is.na(pass_frame), 1000, pass_frame)) %>%
   mutate(timer_frame = 10*seconds + ball_snap_frameId) %>%
   mutate(stop_frame = pmin(timer_frame, pass_frame)) %>%
-  mutate(pass_away = ifelse(pass_frame <= timer_frame, "yes", "no"))
+  mutate(pass_away = ifelse(pass_frame <= decel_frameId, "yes", "no"))
+# could be timer_frame
 
-
-normalize <- pbp %>% filter(frameId == stop_frame) %>%
+#instead of frameId == stop_frame
+normalize <- pbp %>% filter(frameId == decel_frameId) %>%
   mutate(vert_depth = abs(x - ball_snap_x), 
          depth = sqrt((x - ball_snap_x)^2 + (y - ball_snap_y)^2), 
          score_diff = ifelse(is_home == 1, preSnapHomeScore - preSnapVisitorScore, -preSnapHomeScore + preSnapVisitorScore), 
@@ -106,8 +119,9 @@ pbp <- pbp %>% left_join(normalize, by = c("gameId", "playId", "nflId")) %>%
 
 pbp_slim <- pbp %>% select(season, week, gameId, playId, x,y, ball_snap_x, ball_snap_y, 
                            beaten, over_under, pff_positionLinedUp, pff_playAction, 
-                           nflId, displayName, team, time_to_throw, pass_away, new_frameId, set) %>%
-  filter(new_frameId <= seconds*10)
+                           nflId, displayName, team, time_to_throw, pass_away, new_frameId, set, 
+                           decel_frameId) %>%
+  filter(new_frameId <= decel_frameId) # could be different
 write.csv(pbp_slim, "C:/Users/eric/Dropbox/ol_maps/sumer_ol/wrangled_pbp.csv", row.names = FALSE)
 #write.csv(averages, "ol_averages.csv", row.names = FALSE)
 write.csv(pbp_slim %>% select(displayName) %>% unique(), "C:/Users/eric/Dropbox/ol_maps/sumer_ol/ol_names.csv", row.names = FALSE)
