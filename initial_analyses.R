@@ -19,8 +19,8 @@ ball_snap_Id <- pbp %>% filter(event %in% c("ball_snap")) %>%
   select(gameId, playId, nflId, ball_snap_frameId = frameId) %>% unique()
 ball_snap_coord <- pbp %>% filter(event %in% c("ball_snap")) %>% 
   select(gameId, playId, nflId, ball_snap_x = x, ball_snap_y = y)
-pbp_next_s <- pbp %>% mutate(s_prev = s, frameId = frameId + 1) %>% 
-  select(gameId, playId, nflId, frameId, s_prev)
+pbp_next_coord <- pbp %>% mutate(x_prev = x, y_prev = y, s_prev = s, frameId = frameId + 1) %>% 
+  select(gameId, playId, nflId, frameId, x_prev, y_prev, s_prev)
 
 pbp <- pbp %>%  
   inner_join(ball_snap_Id, by = c("gameId", "playId", "nflId")) %>% 
@@ -29,11 +29,13 @@ pbp <- pbp %>%
   inner_join(scouting, by = c("gameId", "playId", "nflId")) %>% 
   inner_join(plays, by = c("gameId", "playId")) %>% 
   inner_join(games, by = "gameId") %>% 
-  left_join(pbp_next_s, by = c("gameId", "playId", "nflId", "frameId")) %>%
+  left_join(pbp_next_coord, by = c("gameId", "playId", "nflId", "frameId")) %>%
   mutate(is_home = ifelse(homeTeamAbbr == team, 1, 0)) %>%
-  mutate(s_delta = s - s_prev)
+  mutate(s_delta = s - s_prev) %>%
+  select(-s_prev)
 
 pbp$s_delta[is.na(pbp$s_delta)] <- 0
+pbp$pff_beatenByDefender[is.na(pbp$pff_beatenByDefender)] <- 0
 
 first_min_s <- pbp %>% filter(frameId > ball_snap_frameId, s_delta < 0) %>% group_by(gameId, playId, nflId) %>%
   arrange(frameId) %>% dplyr::slice(1:1) %>%
@@ -108,14 +110,42 @@ fit <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + pass_away + t
 normalize[, "exp_depth"] <- predict(fit, normalize) 
 normalize <- normalize %>% select(gameId, playId, nflId, vert_depth, exp_depth)
 
-ggplot(normalize, aes(exp_depth, vert_depth)) + geom_point() + geom_smooth(method = "lm") + geom_abline()
+pbp[is.na(pbp)] <- 0
+
+ControlParamteres <- trainControl(method = "cv", number = 5,
+                                  savePredictions = TRUE, classProbs = TRUE,
+                                  verboseIter = TRUE,
+                                  allowParallel = TRUE)
+
+parametersGrid <-  expand.grid(eta = c(0.1), colsample_bytree = c(0.25, 0.5, 0.75),
+                               max_depth = c(2, 4, 6, 8), nrounds = c(200),
+                               gamma = 1, min_child_weight = 1, subsample = 1)
 
 pbp <- pbp %>% left_join(normalize, by = c("gameId", "playId", "nflId")) %>%
   mutate(over_under = ifelse(vert_depth > exp_depth, 
-                             "yes", "no")) %>%
+                             "yes", "no")) %>% 
+  mutate(score_diff = ifelse(is_home == 1, preSnapHomeScore - preSnapVisitorScore, -preSnapHomeScore + preSnapVisitorScore), 
+                      field_pos = ifelse(possessionTeam == yardlineSide, 50 + yardlineNumber, yardlineNumber)) %>%
   mutate(beaten = ifelse(pff_beatenByDefender == 1, "yes", "no")) %>%
   filter(frameId >= ball_snap_frameId) %>%
-  mutate(new_frameId = frameId - ball_snap_frameId + 1)
+  mutate(new_frameId = frameId - ball_snap_frameId + 1) %>%
+  mutate(x_prev = ifelse(is.na(x_prev), ball_snap_x, x_prev), 
+         y_prev = ifelse(is.na(y_prev), ball_snap_y, y_prev))
+
+fit_opti <- train(beaten ~ down + yardsToGo + field_pos + is_home + pass_away + time_to_throw + set + 
+                    ball_snap_x + ball_snap_y + 
+                    x_prev + y_prev + 
+                    x + y + 
+                    pff_positionLinedUp + score_diff + 
+                    defendersInBox + pff_playAction + pff_passCoverageType + 
+                    dropBackType + offenseFormation, 
+                  data = pbp, method = "xgbTree", trControl = ControlParamteres,
+                  tuneGrid = parametersGrid)
+
+varImp(fit)
+varImp(fit_opti)
+
+ggplot(normalize, aes(exp_depth, vert_depth)) + geom_point() + geom_smooth(method = "lm") + geom_abline()
 
 pbp_slim <- pbp %>% select(season, week, gameId, playId, x,y, ball_snap_x, ball_snap_y, 
                            beaten, over_under, pff_positionLinedUp, pff_playAction, 

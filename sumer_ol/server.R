@@ -12,6 +12,7 @@ library(dplyr)
 library(DT)
 library(ggplot2)
 library(formattable)
+library(bezier)
 #setwd("C:/Users/eags8/Dropbox/pff_bdue")
 
 data_frame <- read.csv("wrangled_pbp.csv", stringsAsFactors = FALSE)
