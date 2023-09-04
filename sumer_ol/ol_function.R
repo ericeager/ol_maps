@@ -20,7 +20,8 @@ ol_function <- function(data_frame, player, position, TTT_l, TTT_u, play_action,
   }
   
   
- data_frame <- data_frame %>% filter(pff_positionLinedUp == position, time_to_throw >= TTT_l, time_to_throw <= TTT_u)
+ data_frame <- data_frame %>% filter(pff_positionLinedUp == position, time_to_throw >= TTT_l, time_to_throw <= TTT_u, 
+                                     new_frameId <= 20) 
  
  table <- data_frame %>% 
     group_by(nflId, displayName, pff_positionLinedUp, new_frameId) %>%
