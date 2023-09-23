@@ -1,7 +1,7 @@
-library(dplyr); library(tidyr)
+library(dplyr); library(tidyr); library(tictoc)
 data_frame <- read.csv("sumer_ol/wrangled_pbp.csv", stringsAsFactors = FALSE)
 
-example <- data_frame %>% filter(displayName == "Donovan Smith")
+example <- data_frame %>% filter(pff_positionLinedUp == "LT")
 
 #example <- data_frame
 #example <- example %>% tidyr::nest(tracking_data = c(x,y, new_frameId))
@@ -309,7 +309,9 @@ cluster_trajectory_data <- function(trajectory_data, P = 3, K = 5, niter = 20){
               init_clusters = init_clusters$cluster, em_results = em_results))
 }
 
-x <- cluster_trajectory_data(trajectory_data, P = 3, K = 2, niter = 20)
+x <- cluster_trajectory_data(trajectory_data %>%
+                               filter(new_frameId <= decel_frameId, 
+                                      new_frameId <= 25), P = 3, K = 2, niter = 50)
 data <- cbind(x$nested, as.data.frame(x$init_clusters))
 colnames(data)[ncol(data)] <- "cluster"
 data <- data %>% as.data.frame() %>% 
@@ -317,14 +319,44 @@ data <- data %>% as.data.frame() %>%
 
 data_frame <- inner_join(example, data)
 
+averages <- data_frame %>% group_by(cluster, new_frameId) %>% summarize(x_mean = mean(x - ball_snap_x), y_mean = mean(y - ball_snap_y))
+
+data_frame <- data_frame %>% left_join(averages)
+
 player <- "Donovan Smith"
-plot <- ggplot(data_frame %>% filter(displayName == player), 
+library(ggplot2)
+ggplot(data_frame, 
                aes(y - ball_snap_y, x - ball_snap_x, group = as.factor(paste(gameId, playId)), color = as.factor(cluster)), #color = as.factor(over_under)), 
                size = 2) + geom_point() + 
  # scale_colour_manual(values = c("gold", "black")) + 
   theme_minimal() + labs(x = "horizontal distance from position at snap",
                          y = "vertical distance from position at snap", 
-                         color = "Cluster", 
-                         title = paste("Pass Blocking Map for", player)) #+
+                         color = "Cluster") + 
+  facet_wrap(~cluster) + geom_path(aes(y_mean, x_mean), color = "red", size = 3)
  # geom_path(aes(y_mean, x_mean), color = "red", size = 3, se = FALSE)
 
+agg_x <- data_frame %>% filter(week <= 5) %>% select(playId, nflId, cluster, beaten) %>% 
+  unique() %>% group_by(nflId, cluster) %>% summarize(n = n(), win = mean(beaten == "no"))
+agg_y <- data_frame %>% filter(week > 5) %>% select(playId, nflId, cluster, beaten) %>% 
+  unique() %>% group_by(nflId, cluster) %>% summarize(n = n(), win = mean(beaten == "no"))
+
+agg_big_x <- data_frame %>% filter(week <= 5) %>% select(playId, nflId, cluster, beaten) %>% 
+  unique() %>% group_by(nflId) %>% summarize(n_tot = n(), win_tot = mean(beaten == "no"))
+agg_big_y <- data_frame %>% filter(week > 5) %>% select(playId, nflId, cluster, beaten) %>% 
+  unique() %>% group_by(nflId) %>% summarize(n_tot = n(), win_tot = mean(beaten == "no"))
+
+agg_x <- agg_x %>% left_join(agg_big_x) %>% mutate(n = n/n_tot, win_ratio = win/win_tot)
+agg_y <- agg_y %>% left_join(agg_big_y) %>% mutate(n = n/n_tot, win_ratio = win/win_tot)
+
+agg_xy <- full_join(agg_x, agg_y, by = c("nflId", "cluster"))
+agg_xy[is.na(agg_xy)] <- 0
+
+CLUST <- 1
+cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.y)
+cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.y)
+nrow(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST))
+
+CLUST <- 2
+cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.y)
+cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.y)
+nrow(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST))
