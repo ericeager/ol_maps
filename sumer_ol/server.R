@@ -13,14 +13,16 @@ library(DT)
 library(ggplot2)
 library(formattable)
 library(bezier)
+library(SimilarityMeasures)
+library(furrr)
 #setwd("C:/Users/eags8/Dropbox/pff_bdue")
 
-data_frame <- read.csv("wrangled_pbp.csv", stringsAsFactors = FALSE)
+data_frame <- read.csv("wrangled_pbp_w_clusters.csv", stringsAsFactors = FALSE)
 source("ol_function.R")
 
 shinyServer(function(input, output) {
   df <- reactive({ol_function(data_frame, input$player, input$position, input$TTT_l, input$TTT_u, input$play_action, input$beaten, 
-                              input$depth)})
+                              input$depth, input$success, input$cluster, input$N)})
   
   output$plot <- ({renderPlot(df()$plot)})
   output$table <- ({renderDataTable(df()$table)})

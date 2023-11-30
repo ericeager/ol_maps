@@ -27,12 +27,15 @@ shinyUI(fluidPage(
     sidebarPanel(  
         selectInput("player", "Player", NAMES, "Jawaan Taylor"), 
         selectInput("position", "Position", c("LT", "LG", "C", "RG", "RT"), "RT"), 
-        numericInput("TTT_l", "Time to Throw Lower Bound", 2.75), 
+        numericInput("N", "Snaps Played", 50), 
+        selectInput("cluster", "Cluster", c("All", "Deep", "Shallow"), "All"), 
+        numericInput("TTT_l", "Time to Throw Lower Bound", 2), 
         numericInput("TTT_u", "Time to Throw Upper Bound", 3.5), 
         selectInput("play_action", "Play Action", c("yes", "no", "all"), "no"), 
        # selectInput("set", "Set", c("All", "Other", "Down Block", "Vertical Set", "Left Guard", "Right Guard"), "All"),
         selectInput("depth", "Did He Reach Depth?", c("yes", "no", "all"), "all"),
-        selectInput("beaten", "Beaten on Play", c("yes", "no", "all"), "all")),
+        selectInput("beaten", "Beaten on Play", c("yes", "no", "all"), "all"), 
+        selectInput("success", "Offensive Success", c("yes", "no", "all"), "all")),
     
     
     mainPanel(align = "center",

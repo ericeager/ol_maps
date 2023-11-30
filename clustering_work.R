@@ -1,25 +1,26 @@
+# clustering algorithms
 library(dplyr); library(tidyr); library(tictoc)
+set.seed(124)
 data_frame <- read.csv("sumer_ol/wrangled_pbp.csv", stringsAsFactors = FALSE)
 
-example <- data_frame %>% filter(pff_positionLinedUp == "LT")
-
-#example <- data_frame
-#example <- example %>% tidyr::nest(tracking_data = c(x,y, new_frameId))
-
+example <- data_frame %>% filter(pff_positionLinedUp == "C")
 trajectory_data <- example
 
+# ancillary function
 calc_new_beta <- function(W, X, Y){
   #W <- diag(weights)
   Beta_new <- solve(t(X) %*% W %*% X) %*% t(X) %*% W %*% Y
   return(Beta_new)
 }
 
+# ancillary function
 calc_new_sigma <- function(W, X, Y, Beta){
   #W <- diag(weights)
   Sigma_new <- diag(diag(as.matrix(Matrix::t(Y - X %*% Beta) %*% W %*% (Y - X %*% Beta) / sum(W))))
 }
 
 
+# ancillary function
 reorder_clusters <- function(em_results){
   
   
@@ -69,11 +70,13 @@ reorder_clusters <- function(em_results){
   
 }
 
+# clustering function
 cluster_trajectory_data <- function(trajectory_data, P = 3, K = 5, niter = 20){
   
   # create data for em algorithm
   prepared_trajectory_data <-
     trajectory_data %>% select(-new_frameId) %>%
+    dplyr::mutate(x = x - ball_snap_x, y = y - ball_snap_y) %>%
     tidyr::nest(data = c(x, y)) %>%
     dplyr::mutate(curve_i = row_number()) %>%
     dplyr::mutate(n_i = purrr::map_dbl(data, nrow),
@@ -309,30 +312,66 @@ cluster_trajectory_data <- function(trajectory_data, P = 3, K = 5, niter = 20){
               init_clusters = init_clusters$cluster, em_results = em_results))
 }
 
+# building clusters
 x <- cluster_trajectory_data(trajectory_data %>%
                                filter(new_frameId <= decel_frameId, 
-                                      new_frameId <= 25), P = 3, K = 2, niter = 50)
+                                      new_frameId <= 35), P = 3, K = 2, niter = 100)
 data <- cbind(x$nested, as.data.frame(x$init_clusters))
 colnames(data)[ncol(data)] <- "cluster"
 data <- data %>% as.data.frame() %>% 
   select(season, week, gameId, playId, nflId, cluster)
 
+#saving clusters
 data_frame <- inner_join(example, data)
+write.csv(data_frame, "C_clusters.csv", row.names = FALSE)
 
-averages <- data_frame %>% group_by(cluster, new_frameId) %>% summarize(x_mean = mean(x - ball_snap_x), y_mean = mean(y - ball_snap_y))
+data_frame <- read.csv("C_clusters.csv")
+averages <- data_frame %>% group_by(cluster, new_frameId) %>% 
+  summarize(x_mean = mean(x - ball_snap_x), y_mean = mean(y - ball_snap_y)) %>%
+  as.data.frame() %>%
+  ungroup()
 
+#ancillary function
+bezier_function <- function(locations) {
+  if (nrow(locations) > 0) {
+    
+    t = seq(0, 1, by = 1/(nrow(locations) - 1))
+    p = matrix(c(locations$y_mean, locations$x_mean), ncol = 2)
+    
+    return(data.frame(locations$new_frameId, bezier(t = t, p = p)))
+  } else {return()}}
+
+averages <- averages %>% tidyr::nest(.by = c("cluster")) %>% 
+  mutate(bezier_curve = future_map(data, bezier_function)) %>%
+  tidyr::unnest(bezier_curve) %>%
+  select(-data) %>%
+  as.data.frame() %>%
+  as.matrix() %>%
+  as.data.frame()
+
+colnames(averages) <- c("cluster", "new_frameId", 
+                        "x_mean", "y_mean")
+
+averages <- averages %>% filter(new_frameId <= 33)
+
+#data_frame <- read.csv("LT_clusters.csv")
 data_frame <- data_frame %>% left_join(averages)
 
-player <- "Donovan Smith"
 library(ggplot2)
-ggplot(data_frame, 
-               aes(y - ball_snap_y, x - ball_snap_x, group = as.factor(paste(gameId, playId)), color = as.factor(cluster)), #color = as.factor(over_under)), 
-               size = 2) + geom_point() + 
+# if we need to change things
+#data_frame <- data_frame %>% mutate(cluster = ifelse(cluster == 1, 2, 1))
+ggplot(data_frame %>% mutate(cluster_nar = ifelse(cluster == 1, "First Cluster", "Second Cluster")), 
+               aes(y - ball_snap_y, x - ball_snap_x, 
+                   color = as.factor(cluster),
+                   group = as.factor(paste(gameId, playId))), #color = as.factor(over_under)), 
+               size = 2) + geom_point() + # geom_smooth(se = FALSE) + 
+  scale_colour_manual(values = c("gold", "black")) + 
  # scale_colour_manual(values = c("gold", "black")) + 
   theme_minimal() + labs(x = "horizontal distance from position at snap",
-                         y = "vertical distance from position at snap", 
-                         color = "Cluster") + 
-  facet_wrap(~cluster) + geom_path(aes(y_mean, x_mean), color = "red", size = 3)
+                         y = "vertical distance from position at snap") + 
+  ggtitle("Centers") + 
+  facet_wrap(~cluster_nar) + theme(legend.position="none") +
+  geom_path(aes(x_mean, y_mean), color = "red", size = 3) 
  # geom_path(aes(y_mean, x_mean), color = "red", size = 3, se = FALSE)
 
 agg_x <- data_frame %>% filter(week <= 5) %>% select(playId, nflId, cluster, beaten) %>% 
@@ -351,6 +390,7 @@ agg_y <- agg_y %>% left_join(agg_big_y) %>% mutate(n = n/n_tot, win_ratio = win/
 agg_xy <- full_join(agg_x, agg_y, by = c("nflId", "cluster"))
 agg_xy[is.na(agg_xy)] <- 0
 
+agg_xy <- agg_xy %>% filter(n_tot.x >= 50, n_tot.y >= 50)
 CLUST <- 1
 cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.y)
 cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.y)
@@ -360,3 +400,12 @@ CLUST <- 2
 cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$n.y)
 cor(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.x, filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST)$win.y)
 nrow(filter(agg_xy, n.x >= 1/6, n.y >= 1/6, cluster == CLUST))
+
+C_clusters <- read.csv("C_clusters.csv", stringsAsFactors = FALSE)
+LG_clusters <- read.csv("LG_clusters.csv", stringsAsFactors = FALSE)
+RG_clusters <- read.csv("RG_clusters.csv", stringsAsFactors = FALSE)
+LT_clusters <- read.csv("LT_clusters.csv", stringsAsFactors = FALSE)
+RT_clusters <- read.csv("RT_clusters.csv", stringsAsFactors = FALSE)
+
+wrangled_pbp <- rbind(C_clusters, LG_clusters, RG_clusters, LT_clusters, RT_clusters)
+write.csv(wrangled_pbp, "sumer_ol/wrangled_pbp_w_clusters.csv", row.names = FALSE)

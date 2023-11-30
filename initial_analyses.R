@@ -1,7 +1,11 @@
+### This script runs the initial analysis
+### This outputs the data isn't csvs that are used in the app, as well as in clustering
 library(dplyr); library(ggplot2); library(xgboost); library(caret)
-seconds <- 3.5
-seconds_first_step <- 1.5
+seconds <- 3.5 # the maximum seconds of evalution
+seconds_first_step <- 1.5 # not really used, but the first-step seconds
 
+# reading in the data, which can be found 
+# https://www.kaggle.com/c/nfl-big-data-bowl-2023
 setwd("C:/Users/eric/Dropbox/PC (2)/Documents")
 players <- read.csv("players.csv") %>% select(nflId, officialPosition, displayName)
 scouting <- read.csv("pffScoutingData.csv") %>%
@@ -22,6 +26,7 @@ ball_snap_coord <- pbp %>% filter(event %in% c("ball_snap")) %>%
 pbp_next_coord <- pbp %>% mutate(x_prev = x, y_prev = y, s_prev = s, frameId = frameId + 1) %>% 
   select(gameId, playId, nflId, frameId, x_prev, y_prev, s_prev)
 
+# joining the data
 pbp <- pbp %>%  
   inner_join(ball_snap_Id, by = c("gameId", "playId", "nflId")) %>% 
   inner_join(ball_snap_coord, by = c("gameId", "playId", "nflId")) %>% 
@@ -34,6 +39,7 @@ pbp <- pbp %>%
   mutate(s_delta = s - s_prev) %>%
   select(-s_prev)
 
+# creating first-step analysis
 pbp$s_delta[is.na(pbp$s_delta)] <- 0
 pbp$pff_beatenByDefender[is.na(pbp$pff_beatenByDefender)] <- 0
 
@@ -60,6 +66,7 @@ pbp <- pbp %>%
                          pff_positionLinedUp %in% c("C") & first_step_x < ball_snap_x & first_step_y >= ball_snap_y ~ "Right Guard",
                          TRUE ~ "Other"))
 
+# looking at when the pass is thrown
 pass_thrown_Id <- pbp %>% filter(event %in% c("pass_forward", "qb_sack", "qb_strip_sack", "run")) %>%
   unique() %>%
   mutate(time_to_throw = (frameId - ball_snap_frameId + 1)/10) %>%
@@ -78,19 +85,21 @@ pbp <- pbp %>% left_join(pass_thrown_Id, by = c("gameId", "playId")) %>%
   mutate(pass_away = ifelse(pass_frame <= decel_frameId, "yes", "no"))
 # could be timer_frame
 
-#instead of frameId == stop_frame
+# looking at the max depth across the offensive line
+max_depth <- pbp %>% filter(frameId <= stop_frame) %>%
+  group_by(gameId, playId) %>% 
+  summarize(max_depth = min(x - ball_snap_x))
+
+# looking at time of throw or 3.5 seconds, for expected depth
 normalize <- pbp %>% filter(frameId == decel_frameId) %>%
   mutate(vert_depth = abs(x - ball_snap_x), 
          depth = sqrt((x - ball_snap_x)^2 + (y - ball_snap_y)^2), 
          score_diff = ifelse(is_home == 1, preSnapHomeScore - preSnapVisitorScore, -preSnapHomeScore + preSnapVisitorScore), 
-         field_pos = ifelse(possessionTeam == yardlineSide, 50 + yardlineNumber, yardlineNumber))
-
-
-# think about nearest offensive player - splits
-# think about time left on the clock
-
+         field_pos = ifelse(possessionTeam == yardlineSide, 50 + yardlineNumber, yardlineNumber)) %>%
+  left_join(max_depth, by = c("gameId", "playId"))
 normalize[is.na(normalize)] <- 0
 
+# hyperparamters
 ControlParamteres <- trainControl(method = "cv", number = 5,
                                   savePredictions = TRUE, classProbs = FALSE,
                                   verboseIter = TRUE,
@@ -100,27 +109,57 @@ parametersGrid <-  expand.grid(eta = c(0.1), colsample_bytree = c(0.25, 0.5, 0.7
                                max_depth = c(2, 4, 6, 8), nrounds = c(200),
                                gamma = 1, min_child_weight = 1, subsample = 1)
 
-fit <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + pass_away + time_to_throw + set + 
+# fitting actual model
+fit <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + 
+               pass_away + time_to_throw + set + max_depth + 
                ball_snap_x + ball_snap_y + pff_positionLinedUp + score_diff + 
                defendersInBox + pff_playAction + pff_passCoverageType + 
                dropBackType + offenseFormation, 
                data = normalize, method = "xgbTree", trControl = ControlParamteres,
              tuneGrid = parametersGrid)
+sqrt(mean((normalize$vert_depth - predict(fit, normalize))^2))
+varImp(fit)
 
+# fitting the null model for comparison
+fit_null <- train(vert_depth ~ down + yardsToGo + field_pos + is_home + score_diff, 
+                  data = normalize, method = "xgbTree", trControl = ControlParamteres,
+                  tuneGrid = parametersGrid)
+
+sqrt(mean((normalize$vert_depth - predict(fit_null, normalize))^2))
 normalize[, "exp_depth"] <- predict(fit, normalize) 
+
+# writting expected depth data into a local folder
+write.csv(normalize, "C:/Users/eric/Dropbox/ol_maps/expected_depth.csv", row.names = FALSE)
+
+# doing some evaluation
+how_good <- data.frame()
+for (j in 1:8) {
+  temp <- group_by(normalize %>% filter(week < j), nflId) %>% summarize(n = n(), beaten = mean(pff_beatenByDefender))
+  how_good <- rbind(how_good, temp)
+}
+
+average_beaten <- mean(normalize$pff_beatenByDefender)
+how_good <- how_good %>% mutate(beaten = pmax(0, (1 - n/36))*average_beaten + 
+                                  pmin(1, n/36)*beaten)
+normalize <- normalize %>% left_join(how_good)
+
+# seeing if getting beaten on a play is dependent on depth after
+# accounting for other things
+summary(glm(pff_beatenByDefender ~ as.factor(over_under) + beaten +
+              (as.factor(down) + yardsToGo)^2 + field_pos + 
+              as.factor(is_home) + pass_away + time_to_throw + set + max_depth + 
+              ball_snap_x + ball_snap_y + pff_positionLinedUp + score_diff + 
+              defendersInBox + pff_playAction + pff_passCoverageType + 
+              dropBackType + offenseFormation, data = normalize %>%
+              mutate(over_under = ifelse(vert_depth > exp_depth, 1, 0))))
 normalize <- normalize %>% select(gameId, playId, nflId, vert_depth, exp_depth)
 
-pbp[is.na(pbp)] <- 0
+# looking at some team-level metrics from nflfastR
+epa <- nflfastR::load_pbp(2021) %>%
+  select(gameId = old_game_id, playId = play_id, epa, success) %>%
+  mutate(gameId = as.integer(gameId), playId = as.integer(playId))
 
-ControlParamteres <- trainControl(method = "cv", number = 5,
-                                  savePredictions = TRUE, classProbs = TRUE,
-                                  verboseIter = TRUE,
-                                  allowParallel = TRUE)
-
-parametersGrid <-  expand.grid(eta = c(0.1), colsample_bytree = c(0.25, 0.5, 0.75),
-                               max_depth = c(2, 4, 6, 8), nrounds = c(200),
-                               gamma = 1, min_child_weight = 1, subsample = 1)
-
+# more adjustments
 pbp <- pbp %>% left_join(normalize, by = c("gameId", "playId", "nflId")) %>%
   mutate(over_under = ifelse(vert_depth > exp_depth, 
                              "yes", "no")) %>% 
@@ -130,28 +169,18 @@ pbp <- pbp %>% left_join(normalize, by = c("gameId", "playId", "nflId")) %>%
   filter(frameId >= ball_snap_frameId) %>%
   mutate(new_frameId = frameId - ball_snap_frameId + 1) %>%
   mutate(x_prev = ifelse(is.na(x_prev), ball_snap_x, x_prev), 
-         y_prev = ifelse(is.na(y_prev), ball_snap_y, y_prev))
+         y_prev = ifelse(is.na(y_prev), ball_snap_y, y_prev)) 
 
-fit_opti <- train(beaten ~ down + yardsToGo + field_pos + is_home + pass_away + time_to_throw + set + 
-                    ball_snap_x + ball_snap_y + 
-                    x_prev + y_prev + 
-                    x + y + 
-                    pff_positionLinedUp + score_diff + 
-                    defendersInBox + pff_playAction + pff_passCoverageType + 
-                    dropBackType + offenseFormation, 
-                  data = pbp, method = "xgbTree", trControl = ControlParamteres,
-                  tuneGrid = parametersGrid)
+pbp <- pbp %>% left_join(epa)
 
-varImp(fit)
-varImp(fit_opti)
-
+# visualzing model results
 ggplot(normalize, aes(exp_depth, vert_depth)) + geom_point() + geom_smooth(method = "lm") + geom_abline()
 
+# writing slimmed down data into a local file
 pbp_slim <- pbp %>% select(season, week, gameId, playId, x,y, ball_snap_x, ball_snap_y, 
                            beaten, over_under, pff_positionLinedUp, pff_playAction, 
                            nflId, displayName, team, time_to_throw, pass_away, new_frameId, set, 
-                           decel_frameId) %>%
+                           decel_frameId, epa, success) %>%
   filter(new_frameId <= decel_frameId) # could be different
 write.csv(pbp_slim, "C:/Users/eric/Dropbox/ol_maps/sumer_ol/wrangled_pbp.csv", row.names = FALSE)
-#write.csv(averages, "ol_averages.csv", row.names = FALSE)
 write.csv(pbp_slim %>% select(displayName) %>% unique(), "C:/Users/eric/Dropbox/ol_maps/sumer_ol/ol_names.csv", row.names = FALSE)
